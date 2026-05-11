@@ -2,7 +2,7 @@ package tests;
 
 import assignments.dungeon.*;
 import assignments.dungeon.Character;
-import org.junit.jupiter.api.*;
+import org.gjunit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 import java.io.File;
 import java.nio.file.Files;
