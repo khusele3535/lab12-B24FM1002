@@ -1,0 +1,207 @@
+name: Lab 12 Auto-Grader — Dungeon Adventure (Exception Handling)
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    name: Grade Dungeon submission
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download JUnit
+        run: |
+          mkdir -p lib
+          curl -sL "https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar" -o lib/junit-platform-console-standalone-1.10.2.jar
+
+      # ─── Compile ───
+      - name: "Compile: Dungeon"
+        id: compile_dungeon
+        continue-on-error: true
+        run: |
+          mkdir -p build/dungeon
+          javac -d build/dungeon assignments/dungeon/*.java
+
+      - name: "Compile: DungeonTest"
+        id: compile_test
+        if: steps.compile_dungeon.outcome == 'success'
+        continue-on-error: true
+        run: |
+          javac -cp build/dungeon:lib/junit-platform-console-standalone-1.10.2.jar \
+                -d build/dungeon tests/DungeonTest.java
+
+      # ─── Run by tag ───
+      - name: "Test: core"
+        id: test_core
+        if: steps.compile_test.outcome == 'success'
+        continue-on-error: true
+        run: |
+          java -jar lib/junit-platform-console-standalone-1.10.2.jar \
+            --class-path build/dungeon \
+            --select-class DungeonTest \
+            --include-tag core \
+            --disable-ansi-colors 2>&1 | tee build/dungeon/core_output.txt
+
+      - name: "Test: stretch"
+        id: test_stretch
+        if: steps.compile_test.outcome == 'success'
+        continue-on-error: true
+        run: |
+          java -jar lib/junit-platform-console-standalone-1.10.2.jar \
+            --class-path build/dungeon \
+            --select-class DungeonTest \
+            --include-tag stretch \
+            --disable-ansi-colors 2>&1 | tee build/dungeon/stretch_output.txt
+
+      - name: "Test: bonus"
+        id: test_bonus
+        if: steps.compile_test.outcome == 'success'
+        continue-on-error: true
+        run: |
+          java -jar lib/junit-platform-console-standalone-1.10.2.jar \
+            --class-path build/dungeon \
+            --select-class DungeonTest \
+            --include-tag bonus \
+            --disable-ansi-colors 2>&1 | tee build/dungeon/bonus_output.txt
+
+      # ─── AI Detection ───
+      - name: "AI Detect: Dungeon"
+        id: ai_dungeon
+        continue-on-error: true
+        run: |
+          mkdir -p build/dungeon
+          python3 scripts/ai_detector.py assignments/dungeon/Shop.java --json \
+            > build/dungeon/ai_report.json 2>&1 || true
+          cat build/dungeon/ai_report.json
+
+      # ─── Compute score & build summary ───
+      - name: "Compute score"
+        id: score
+        if: always()
+        run: |
+          parse_tier() {
+            local file="$1"
+            if [ ! -f "$file" ]; then
+              echo "0 0"; return
+            fi
+            local p t f
+            p=$(grep -oE '[0-9]+ tests successful' "$file" | grep -oE '[0-9]+' | head -1)
+            f=$(grep -oE '[0-9]+ tests failed' "$file" | grep -oE '[0-9]+' | head -1)
+            p=${p:-0}
+            f=${f:-0}
+            t=$((p + f))
+            echo "$p $t"
+          }
+
+          read CORE_P CORE_T < <(parse_tier "build/dungeon/core_output.txt")
+          read STRETCH_P STRETCH_T < <(parse_tier "build/dungeon/stretch_output.txt")
+          read BONUS_P BONUS_T < <(parse_tier "build/dungeon/bonus_output.txt")
+
+          CORE_PTS=$(awk -v p="$CORE_P" -v t="$CORE_T" 'BEGIN{ if(t>0) printf "%.1f",(p/t)*60; else print "0.0" }')
+          STRETCH_PTS=$(awk -v p="$STRETCH_P" -v t="$STRETCH_T" 'BEGIN{ if(t>0) printf "%.1f",(p/t)*30; else print "0.0" }')
+          BONUS_PTS=$(awk -v p="$BONUS_P" -v t="$BONUS_T" 'BEGIN{ if(t>0) printf "%.1f",(p/t)*10; else print "0.0" }')
+          TOTAL=$(awk -v a="$CORE_PTS" -v b="$STRETCH_PTS" -v c="$BONUS_PTS" 'BEGIN{ printf "%.1f", a+b+c }')
+
+          AI_LEVEL="Unknown"
+          AI_SCORE="?"
+          AI_BADGE="❓ N/A"
+          if [ -f "build/dungeon/ai_report.json" ]; then
+            AI_LEVEL=$(python3 -c "import json; d=json.load(open('build/dungeon/ai_report.json')); print(d.get('level','?'))" 2>/dev/null || echo "?")
+            AI_SCORE=$(python3 -c "import json; d=json.load(open('build/dungeon/ai_report.json')); print(d.get('score','?'))" 2>/dev/null || echo "?")
+            case "$AI_LEVEL" in
+              LOW) AI_BADGE="✅ LOW ($AI_SCORE)" ;;
+              MEDIUM) AI_BADGE="⚠️ MEDIUM ($AI_SCORE)" ;;
+              HIGH) AI_BADGE="🚨 HIGH ($AI_SCORE)" ;;
+            esac
+          fi
+
+          COMPILE_STATUS="✅ OK"
+          if [ "${{ steps.compile_dungeon.outcome }}" != "success" ]; then
+            COMPILE_STATUS="❌ Compile Error"
+          elif [ "${{ steps.compile_test.outcome }}" != "success" ]; then
+            COMPILE_STATUS="❌ Test Compile Error"
+          fi
+
+          {
+            echo "CORE_P=$CORE_P"
+            echo "CORE_T=$CORE_T"
+            echo "STRETCH_P=$STRETCH_P"
+            echo "STRETCH_T=$STRETCH_T"
+            echo "BONUS_P=$BONUS_P"
+            echo "BONUS_T=$BONUS_T"
+            echo "CORE_PTS=$CORE_PTS"
+            echo "STRETCH_PTS=$STRETCH_PTS"
+            echo "BONUS_PTS=$BONUS_PTS"
+            echo "TOTAL=$TOTAL"
+            echo "AI_BADGE=$AI_BADGE"
+            echo "AI_LEVEL=$AI_LEVEL"
+            echo "COMPILE_STATUS=$COMPILE_STATUS"
+          } >> "$GITHUB_OUTPUT"
+
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          # 🐉 Lab 12 — Dungeon Adventure (Exception Handling) Grade
+
+          **Compile:** $COMPILE_STATUS
+
+          | Tier | Tests | Points |
+          |------|-------|--------|
+          | 🟢 Core | $CORE_P / $CORE_T | **$CORE_PTS / 60** |
+          | 🟡 Stretch | $STRETCH_P / $STRETCH_T | **$STRETCH_PTS / 30** |
+          | 🔴 Bonus | $BONUS_P / $BONUS_T | **$BONUS_PTS / 10** |
+          | **Total** | | **$TOTAL / 100** |
+
+          **AI Detection:** $AI_BADGE
+
+          ---
+          *Auto-graded on $(date '+%Y-%m-%d %H:%M UTC')*
+          EOF
+
+      # ─── Post PR comment ───
+      - name: "Post grade comment to PR"
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const out = `${{ steps.score.outputs.TOTAL }}`;
+            const body = `## 🐉 Lab 12 — Dungeon Auto-Grade
+
+            **Compile:** ${{ steps.score.outputs.COMPILE_STATUS }}
+
+            | Tier | Tests | Points |
+            |------|-------|--------|
+            | 🟢 Core | ${{ steps.score.outputs.CORE_P }} / ${{ steps.score.outputs.CORE_T }} | **${{ steps.score.outputs.CORE_PTS }} / 60** |
+            | 🟡 Stretch | ${{ steps.score.outputs.STRETCH_P }} / ${{ steps.score.outputs.STRETCH_T }} | **${{ steps.score.outputs.STRETCH_PTS }} / 30** |
+            | 🔴 Bonus | ${{ steps.score.outputs.BONUS_P }} / ${{ steps.score.outputs.BONUS_T }} | **${{ steps.score.outputs.BONUS_PTS }} / 10** |
+            | **Total** | | **${out} / 100** |
+
+            **AI Detection:** ${{ steps.score.outputs.AI_BADGE }}
+
+            ---
+            _Auto-graded. Push more commits to this branch to re-run._`;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

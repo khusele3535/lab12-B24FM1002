@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ### IntelliJ IDEA ###
 out/
 !**/src/main/**/out/
@@ -28,3 +29,35 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+=======
+# Compiled class files
+*.class
+
+# Build directories
+build/
+out/
+target/
+bin/
+
+# JUnit / downloaded jars
+lib/
+*.jar
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+>>>>>>> 45b608722014ac71122a00dbe958520061938231
